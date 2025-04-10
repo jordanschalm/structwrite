@@ -1,4 +1,4 @@
-module github.com/flow/flow-go/utils/linters/structwrite
+module github.com/jordanschalm/structwrite
 
 go 1.23.0
 
