@@ -1,6 +1,7 @@
-package linters
+package structwrite
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -15,7 +16,10 @@ func init() {
 }
 
 type Settings struct {
+	// Structs is a list of struct types for which immutability outside the constructor is enforced.
+	// Each element should be a fully qualified
 	Structs []string `json:"structs"`
+	//
 }
 
 type PluginStructWrite struct {
@@ -79,14 +83,23 @@ func (p *PluginStructWrite) run(pass *analysis.Pass) (interface{}, error) {
 				}
 
 				structName := named.Obj().Name()
-				if !p.structs[structName] {
+				fullyQualifiedStructName := named.String()
+				fmt.Println(fullyQualifiedStructName)
+				if !p.structs[fullyQualifiedStructName] {
 					continue
 				}
 
 				// Find enclosing function
 				funcDecl := findEnclosingFunc(file, n.Pos())
 				if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
-					pass.Reportf(assignStmt.Lhs[i].Pos(), "write to %s field outside constructor", structName)
+					pass.Reportf(assignStmt.Lhs[i].Pos(), "write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), named.String())
+					fmt.Printf("write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), named.String())
+					if funcDecl.Doc == nil {
+						continue
+					}
+					for i, comment := range funcDecl.Doc.List {
+						fmt.Println(i, comment.Text)
+					}
 				}
 			}
 
