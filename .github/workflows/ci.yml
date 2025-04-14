@@ -50,9 +50,11 @@ jobs:
         args: "--no-config --disable-all"
         working-directory: ${{ matrix.dir }}
     - name: Build custom linter
+      if: success() || failure()
       run: |
         golangci-lint custom
     - name: Run golangci-lint
+      if: success() || failure()
       uses: golangci/golangci-lint-action@v6
       with:
         install-mode: 'none'
