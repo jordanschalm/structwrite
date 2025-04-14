@@ -52,6 +52,10 @@ jobs:
       if: success() || failure()
       run: |
         golangci-lint custom
+    - name: Check for linter
+      run: ls -a ./tools
+    - name: Check cwd
+      run: ls -a .
     - name: Run golangci-lint
       if: success() || failure()
       uses: golangci/golangci-lint-action@v6
