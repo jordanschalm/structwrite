@@ -36,7 +36,7 @@ jobs:
       shell: bash
     - name: Set Path
       run: |
-        echo "${{ inputs.working-directory }}/tools" >> $GITHUB_PATH
+        echo "./tools" >> $GITHUB_PATH
       shell: bash
     - name: Get Path2
       run: |
@@ -48,7 +48,6 @@ jobs:
         # Required: the version of golangci-lint is required and must be specified without patch version: we always use the latest patch version.
         version: v1.63
         args: "--no-config --disable-all"
-        working-directory: ${{ matrix.dir }}
     - name: Build custom linter
       if: success() || failure()
       run: |
@@ -59,4 +58,3 @@ jobs:
       with:
         install-mode: 'none'
         args: "-v"
-        working-directory: ${{ matrix.dir }}
