@@ -30,6 +30,18 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
         cache: true
+    - name: Get Path1
+      run: |
+        echo $GITHUB_PATH
+      shell: bash
+    - name: Set Path
+      run: |
+        echo "${{ inputs.working-directory }}/tools/custom-gcl" >> $GITHUB_PATH
+      shell: bash
+    - name: Get Path2
+      run: |
+        echo $GITHUB_PATH
+      shell: bash
     - name: Install golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
@@ -39,4 +51,3 @@ jobs:
         - --no-config
         - --disable-all
         working-directory: ${{ matrix.dir }}
-    - name: Install custom golangci-lint
