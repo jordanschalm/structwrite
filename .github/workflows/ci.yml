@@ -40,7 +40,7 @@ jobs:
       shell: bash
     - name: Get Path2
       run: |
-        echo $GITHUB_PATH
+        echo $PATH
       shell: bash
     - name: Install golangci-lint
       uses: golangci/golangci-lint-action@v6
@@ -48,4 +48,13 @@ jobs:
         # Required: the version of golangci-lint is required and must be specified without patch version: we always use the latest patch version.
         version: v1.63
         args: "--no-config --disable-all"
+        working-directory: ${{ matrix.dir }}
+    - name: Build custom linter
+      run: |
+        golangci-lint custom
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        install-mode: 'none'
+        args: "-v"
         working-directory: ${{ matrix.dir }}
