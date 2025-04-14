@@ -31,14 +31,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Run golangci-lint linter
-      if: ${{ hashFiles(format('{0}/{1}',inputs.working-directory,'.custom-gcl.yml')) == '' }}
-      uses: golangci/golangci-lint-action@v6
-      with:
-        skip-cache: ${{ inputs.skip-cache }}
-        version: ${{ inputs.version }}
-        working-directory: ${{ inputs.working-directory }}
-
     - name: Run custom-gcl linter
       if: ${{ hashFiles(format('{0}/{1}',inputs.working-directory,'.custom-gcl.yml')) != '' }}
       run: |
@@ -47,3 +39,11 @@ runs:
         ${{ inputs.custom-gcl-binary }} {{inputs.args}} run ./...
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+
+    - name: Run golangci-lint linter
+      if: ${{ hashFiles(format('{0}/{1}',inputs.working-directory,'.custom-gcl.yml')) == '' }}
+      uses: golangci/golangci-lint-action@v6
+      with:
+        skip-cache: ${{ inputs.skip-cache }}
+        version: ${{ inputs.version }}
+        working-directory: ${{ inputs.working-directory }}
