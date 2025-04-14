@@ -2,8 +2,6 @@ module github.com/jordanschalm/structwrite
 
 go 1.23.0
 
-toolchain go1.24.2
-
 require (
 	github.com/golangci/plugin-module-register v0.1.1
 	github.com/stretchr/testify v1.10.0
