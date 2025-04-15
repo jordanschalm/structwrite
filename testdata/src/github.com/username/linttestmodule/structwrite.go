@@ -19,8 +19,11 @@ func NonWritableConstructLiteral() {
 	nw = NonWritable{A: 1}   // want "construction of NonWritable outside constructor"
 	nwp := &NonWritable{}    // want "construction of NonWritable outside constructor"
 	nwp = &NonWritable{A: 1} // want "construction of NonWritable outside constructor"
+	//nwp = new(NonWritable)   // TODO - currently disallowed
+	var nwnw NonWritable // TODO - currently allowed
 	_ = nw
 	_ = nwp
+	_ = nwnw
 }
 
 func NonWritableSetALiteral() {
@@ -85,9 +88,9 @@ func (w *EmbedsNonWritable) SetA() {
 }
 
 func NonEmbedsWritableConstructLiteral() {
-	nw := EmbedsNonWritable{}
-	nw = EmbedsNonWritable{NonWritable: NonWritable{A: 1}} // want "construction of NonWritable outside constructor"
-	nwp := &EmbedsNonWritable{}
+	nw := EmbedsNonWritable{}                                // TODO - currently allowed
+	nw = EmbedsNonWritable{NonWritable: NonWritable{A: 1}}   // want "construction of NonWritable outside constructor"
+	nwp := &EmbedsNonWritable{}                              // TODO - currently allowed
 	nwp = &EmbedsNonWritable{NonWritable: NonWritable{A: 1}} // want "construction of NonWritable outside constructor"
 	_ = nw
 	_ = nwp

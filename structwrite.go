@@ -14,18 +14,21 @@ func init() {
 	register.Plugin("structwrite", New)
 }
 
+// Settings defines the configuration schema for the plugin.
 type Settings struct {
-	// Structs is a list of struct types for which immutability outside the constructor is enforced.
-	// Each element should be a fully qualified
+	// Structs is a list of fully-qualified struct type names for which immutability is enforced.
 	Structs []string `json:"structs"`
-	//
+
+	// ConstructorRegex is a regex pattern (optional) to identify allowed constructor function names.
 	ConstructorRegex string `json:"constructorRegex"`
 }
 
+// PluginStructWrite implements the LinterPlugin interface for the structwrite linter.
 type PluginStructWrite struct {
 	structs map[string]bool
 }
 
+// New creates a new instance of the PluginStructWrite plugin.
 func New(cfg any) (register.LinterPlugin, error) {
 	s, err := register.DecodeSettings[Settings](cfg)
 	if err != nil {
@@ -43,7 +46,7 @@ func New(cfg any) (register.LinterPlugin, error) {
 func (p *PluginStructWrite) BuildAnalyzers() ([]*analysis.Analyzer, error) {
 	a := &analysis.Analyzer{
 		Name: "structwrite",
-		Doc:  "flags writes to specified struct fields outside constructor functions",
+		Doc:  "flags writes to specified struct fields or construction of structs outside constructor functions",
 		Run:  p.run,
 	}
 	return []*analysis.Analyzer{a}, nil
@@ -53,73 +56,150 @@ func (p *PluginStructWrite) GetLoadMode() string {
 	return register.LoadModeTypesInfo
 }
 
+// run is the main analysis function.
 func (p *PluginStructWrite) run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		ast.Inspect(file, func(n ast.Node) bool {
-
-			composite, ok := n.(*ast.CompositeLit)
-			if ok {
-				typ := pass.TypesInfo.Types[composite].Type
-				if typ == nil {
-					return true
-				}
-
-				typ = deref(typ)
-
-				named, ok := typ.(*types.Named)
-				if !ok {
-					return true
-				}
-
-				fullyQualified := named.String()
-				if p.structs[fullyQualified] {
-					funcDecl := findEnclosingFunc(file, n.Pos())
-					if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
-						pass.Reportf(composite.Pos(),
-							"construction of %s outside constructor",
-							named.Obj().Name())
-					}
-				}
+			switch node := n.(type) {
+			case *ast.AssignStmt:
+				p.handleAssignStmt(node, pass, file)
+			case *ast.CompositeLit:
+				p.handleCompositeLit(node, pass, file)
+			case *ast.CallExpr:
+				p.handleCallExpr(node, pass, file)
 			}
-
-			assignStmt, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-
-			for i, lhs := range assignStmt.Lhs {
-
-				selExpr, ok := lhs.(*ast.SelectorExpr)
-				if !ok {
-					continue
-				}
-
-				found, structName, fullyQualified := p.containsTrackedStruct(selExpr, pass)
-				if !found {
-					continue
-				}
-
-				// Find enclosing function
-				funcDecl := findEnclosingFunc(file, n.Pos())
-				if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
-					pass.Reportf(assignStmt.Lhs[i].Pos(), "write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), fullyQualified)
-					//fmt.Printf("write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), fullyQualified)
-					if funcDecl.Doc == nil {
-						continue
-					}
-					//for i, comment := range funcDecl.Doc.List {
-					//fmt.Println(i, comment.Text)
-					//}
-				}
-			}
-
 			return true
 		})
 	}
-
 	return nil, nil
 }
 
+// handleAssignStmt checks for disallowed writes to tracked struct fields.
+func (p *PluginStructWrite) handleAssignStmt(assign *ast.AssignStmt, pass *analysis.Pass, file *ast.File) {
+	for i, lhs := range assign.Lhs {
+		selExpr, ok := lhs.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+
+		found, structName, fullyQualified := p.containsTrackedStruct(selExpr, pass)
+		if !found {
+			continue
+		}
+
+		funcDecl := findEnclosingFunc(file, assign.Pos())
+		if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
+			pass.Reportf(assign.Lhs[i].Pos(),
+				"write to %s field outside constructor: func=%s, named=%s",
+				structName, funcNameOrEmpty(funcDecl), fullyQualified)
+		}
+	}
+}
+
+// handleCompositeLit checks for disallowed construction of tracked structs using literals.
+func (p *PluginStructWrite) handleCompositeLit(lit *ast.CompositeLit, pass *analysis.Pass, file *ast.File) {
+	typ := pass.TypesInfo.Types[lit].Type
+	if typ == nil {
+		return
+	}
+	typ = deref(typ)
+
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return
+	}
+
+	fullyQualified := named.String()
+	if !p.structs[fullyQualified] {
+		return
+	}
+
+	funcDecl := findEnclosingFunc(file, lit.Pos())
+	if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
+		pass.Reportf(lit.Pos(),
+			"construction of %s outside constructor", named.Obj().Name())
+	}
+}
+
+// handleCallExpr checks for disallowed construction of tracked structs using new().
+// TODO: is this desirable? We should do one of the following:
+//   - consistently allow construction of empty instances of structs
+//   - prevent construction of empty instances in ALL cases
+//     (the main one not currently handled is instantiating a type where struct is a field of the type
+//     and the field is not explicitly set)
+func (p *PluginStructWrite) handleCallExpr(call *ast.CallExpr, pass *analysis.Pass, file *ast.File) {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok || ident.Name != "new" || len(call.Args) != 1 {
+		return
+	}
+
+	typ := pass.TypesInfo.Types[call.Args[0]].Type
+	if typ == nil {
+		return
+	}
+	typ = deref(typ)
+
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return
+	}
+
+	fullyQualified := named.String()
+	if !p.structs[fullyQualified] {
+		return
+	}
+
+	funcDecl := findEnclosingFunc(file, call.Pos())
+	if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
+		pass.Reportf(call.Pos(),
+			"construction of %s using new() outside constructor function: func=%s",
+			fullyQualified, funcNameOrEmpty(funcDecl))
+	}
+}
+
+// containsTrackedStruct checks whether the field accessed via selector expression belongs to a tracked struct,
+// either directly or via embedding.
+func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pass *analysis.Pass) (bool, string, string) {
+	// Handle promoted fields (embedding)
+	if sel := pass.TypesInfo.Selections[selExpr]; sel != nil && sel.Kind() == types.FieldVal {
+		typ := sel.Recv()
+		for _, idx := range sel.Index() {
+			structType, ok := deref(typ).Underlying().(*types.Struct)
+			if !ok || idx >= structType.NumFields() {
+				break
+			}
+			field := structType.Field(idx)
+			typ = field.Type()
+
+			if named, ok := deref(typ).(*types.Named); ok {
+				fullyQualified := named.String()
+				if p.structs[fullyQualified] {
+					return true, named.Obj().Name(), fullyQualified
+				}
+			}
+		}
+	}
+
+	// Fallback: direct access (non-promoted)
+	tv, ok := pass.TypesInfo.Types[selExpr.X]
+	if !ok {
+		return false, "", ""
+	}
+
+	typ := deref(tv.Type)
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return false, "", ""
+	}
+	fullyQualified := named.String()
+	if p.structs[fullyQualified] {
+		return true, named.Obj().Name(), fullyQualified
+	}
+
+	return false, "", ""
+}
+
+// findEnclosingFunc returns the enclosing function declaration for a given position.
 func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
@@ -131,45 +211,7 @@ func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 	return nil
 }
 
-// containsTrackedStruct checks if any type in the selector chain matches a tracked struct.
-// It returns the matched struct's name and fully qualified name if found.
-func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pass *analysis.Pass) (bool, string, string) {
-	// Check for field selection via embedding
-	if sel := pass.TypesInfo.Selections[selExpr]; sel != nil && sel.Kind() == types.FieldVal {
-		// Walk the type chain using the index path
-		typ := sel.Recv()
-		for _, idx := range sel.Index() {
-			structType, ok := deref(typ).Underlying().(*types.Struct)
-			if !ok || idx >= structType.NumFields() {
-				break
-			}
-			field := structType.Field(idx)
-			typ = field.Type()
-
-			// Check if it's one of the tracked structs
-			if named, ok := deref(typ).(*types.Named); ok {
-				fullyQualified := named.String()
-				if p.structs[fullyQualified] {
-					return true, named.Obj().Name(), fullyQualified
-				}
-			}
-		}
-	}
-
-	// Fallback: direct access (no embedding)
-	if tv, ok := pass.TypesInfo.Types[selExpr.X]; ok {
-		typ := deref(tv.Type)
-		if named, ok := typ.(*types.Named); ok {
-			fullyQualified := named.String()
-			if p.structs[fullyQualified] {
-				return true, named.Obj().Name(), fullyQualified
-			}
-		}
-	}
-
-	return false, "", ""
-}
-
+// deref removes pointer indirection from a type.
 func deref(t types.Type) types.Type {
 	if ptr, ok := t.(*types.Pointer); ok {
 		return ptr.Elem()
@@ -177,6 +219,7 @@ func deref(t types.Type) types.Type {
 	return t
 }
 
+// funcNameOrEmpty returns the function name or a fallback if nil.
 func funcNameOrEmpty(fn *ast.FuncDecl) string {
 	if fn != nil {
 		return fn.Name.Name
