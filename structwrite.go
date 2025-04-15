@@ -1,7 +1,6 @@
 package structwrite
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -20,6 +19,7 @@ type Settings struct {
 	// Each element should be a fully qualified
 	Structs []string `json:"structs"`
 	//
+	ConstructorRegex string `json:"constructorRegex"`
 }
 
 type PluginStructWrite struct {
@@ -56,50 +56,60 @@ func (p *PluginStructWrite) GetLoadMode() string {
 func (p *PluginStructWrite) run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		ast.Inspect(file, func(n ast.Node) bool {
+
+			composite, ok := n.(*ast.CompositeLit)
+			if ok {
+				typ := pass.TypesInfo.Types[composite].Type
+				if typ == nil {
+					return true
+				}
+
+				typ = deref(typ)
+
+				named, ok := typ.(*types.Named)
+				if !ok {
+					return true
+				}
+
+				fullyQualified := named.String()
+				if p.structs[fullyQualified] {
+					funcDecl := findEnclosingFunc(file, n.Pos())
+					if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
+						pass.Reportf(composite.Pos(),
+							"construction of %s outside constructor",
+							named.Obj().Name())
+					}
+				}
+			}
+
 			assignStmt, ok := n.(*ast.AssignStmt)
 			if !ok {
 				return true
 			}
 
 			for i, lhs := range assignStmt.Lhs {
+
 				selExpr, ok := lhs.(*ast.SelectorExpr)
 				if !ok {
 					continue
 				}
 
-				typ := pass.TypesInfo.Types[selExpr.X].Type
-				if typ == nil {
-					continue
-				}
-
-				// Unwrap pointer if needed
-				if ptr, ok := typ.(*types.Pointer); ok {
-					typ = ptr.Elem()
-				}
-
-				named, ok := typ.(*types.Named)
-				if !ok {
-					continue
-				}
-
-				structName := named.Obj().Name()
-				fullyQualifiedStructName := named.String()
-				fmt.Println(fullyQualifiedStructName)
-				if !p.structs[fullyQualifiedStructName] {
+				found, structName, fullyQualified := p.containsTrackedStruct(selExpr, pass)
+				if !found {
 					continue
 				}
 
 				// Find enclosing function
 				funcDecl := findEnclosingFunc(file, n.Pos())
 				if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
-					pass.Reportf(assignStmt.Lhs[i].Pos(), "write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), named.String())
-					fmt.Printf("write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), named.String())
+					pass.Reportf(assignStmt.Lhs[i].Pos(), "write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), fullyQualified)
+					//fmt.Printf("write to %s field outside constructor: func=%s, named=%s", structName, funcDecl.Name.String(), fullyQualified)
 					if funcDecl.Doc == nil {
 						continue
 					}
-					for i, comment := range funcDecl.Doc.List {
-						fmt.Println(i, comment.Text)
-					}
+					//for i, comment := range funcDecl.Doc.List {
+					//fmt.Println(i, comment.Text)
+					//}
 				}
 			}
 
@@ -119,4 +129,57 @@ func findEnclosingFunc(file *ast.File, pos token.Pos) *ast.FuncDecl {
 		}
 	}
 	return nil
+}
+
+// containsTrackedStruct checks if any type in the selector chain matches a tracked struct.
+// It returns the matched struct's name and fully qualified name if found.
+func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pass *analysis.Pass) (bool, string, string) {
+	// Check for field selection via embedding
+	if sel := pass.TypesInfo.Selections[selExpr]; sel != nil && sel.Kind() == types.FieldVal {
+		// Walk the type chain using the index path
+		typ := sel.Recv()
+		for _, idx := range sel.Index() {
+			structType, ok := deref(typ).Underlying().(*types.Struct)
+			if !ok || idx >= structType.NumFields() {
+				break
+			}
+			field := structType.Field(idx)
+			typ = field.Type()
+
+			// Check if it's one of the tracked structs
+			if named, ok := deref(typ).(*types.Named); ok {
+				fullyQualified := named.String()
+				if p.structs[fullyQualified] {
+					return true, named.Obj().Name(), fullyQualified
+				}
+			}
+		}
+	}
+
+	// Fallback: direct access (no embedding)
+	if tv, ok := pass.TypesInfo.Types[selExpr.X]; ok {
+		typ := deref(tv.Type)
+		if named, ok := typ.(*types.Named); ok {
+			fullyQualified := named.String()
+			if p.structs[fullyQualified] {
+				return true, named.Obj().Name(), fullyQualified
+			}
+		}
+	}
+
+	return false, "", ""
+}
+
+func deref(t types.Type) types.Type {
+	if ptr, ok := t.(*types.Pointer); ok {
+		return ptr.Elem()
+	}
+	return t
+}
+
+func funcNameOrEmpty(fn *ast.FuncDecl) string {
+	if fn != nil {
+		return fn.Name.Name
+	}
+	return "(unknown)"
 }
