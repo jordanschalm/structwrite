@@ -17,9 +17,11 @@ func init() {
 // Settings defines the configuration schema for the plugin.
 type Settings struct {
 	// Structs is a list of fully-qualified struct type names for which immutability is enforced.
+	// TODO: define in godoc instead?
 	Structs []string `json:"structs"`
 
 	// ConstructorRegex is a regex pattern (optional) to identify allowed constructor function names.
+	// TODO: unused
 	ConstructorRegex string `json:"constructorRegex"`
 }
 
@@ -74,7 +76,8 @@ func (p *PluginStructWrite) run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-// handleAssignStmt checks for disallowed writes to tracked struct fields.
+// handleAssignStmt checks for disallowed writes to tracked struct fields in assignments.
+// It handles pointer and literal types, and writes to fields promoted through embedding.
 func (p *PluginStructWrite) handleAssignStmt(assign *ast.AssignStmt, pass *analysis.Pass, file *ast.File) {
 	for i, lhs := range assign.Lhs {
 		selExpr, ok := lhs.(*ast.SelectorExpr)
@@ -82,7 +85,7 @@ func (p *PluginStructWrite) handleAssignStmt(assign *ast.AssignStmt, pass *analy
 			continue
 		}
 
-		found, structName, fullyQualified := p.containsTrackedStruct(selExpr, pass)
+		found, named := p.containsTrackedStruct(selExpr, pass)
 		if !found {
 			continue
 		}
@@ -91,7 +94,7 @@ func (p *PluginStructWrite) handleAssignStmt(assign *ast.AssignStmt, pass *analy
 		if funcDecl == nil || !strings.HasPrefix(funcDecl.Name.Name, "New") {
 			pass.Reportf(assign.Lhs[i].Pos(),
 				"write to %s field outside constructor: func=%s, named=%s",
-				structName, funcNameOrEmpty(funcDecl), fullyQualified)
+				named.Obj().Name(), funcNameOrEmpty(funcDecl), named.String())
 		}
 	}
 }
@@ -159,7 +162,7 @@ func (p *PluginStructWrite) handleCallExpr(call *ast.CallExpr, pass *analysis.Pa
 
 // containsTrackedStruct checks whether the field accessed via selector expression belongs to a tracked struct,
 // either directly or via embedding.
-func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pass *analysis.Pass) (bool, string, string) {
+func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pass *analysis.Pass) (bool, *types.Named) {
 	// Handle promoted fields (embedding)
 	if sel := pass.TypesInfo.Selections[selExpr]; sel != nil && sel.Kind() == types.FieldVal {
 		typ := sel.Recv()
@@ -174,7 +177,7 @@ func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pas
 			if named, ok := deref(typ).(*types.Named); ok {
 				fullyQualified := named.String()
 				if p.structs[fullyQualified] {
-					return true, named.Obj().Name(), fullyQualified
+					return true, named
 				}
 			}
 		}
@@ -183,20 +186,20 @@ func (p *PluginStructWrite) containsTrackedStruct(selExpr *ast.SelectorExpr, pas
 	// Fallback: direct access (non-promoted)
 	tv, ok := pass.TypesInfo.Types[selExpr.X]
 	if !ok {
-		return false, "", ""
+		return false, nil
 	}
 
 	typ := deref(tv.Type)
 	named, ok := typ.(*types.Named)
 	if !ok {
-		return false, "", ""
+		return false, nil
 	}
 	fullyQualified := named.String()
 	if p.structs[fullyQualified] {
-		return true, named.Obj().Name(), fullyQualified
+		return true, named
 	}
 
-	return false, "", ""
+	return false, nil
 }
 
 // findEnclosingFunc returns the enclosing function declaration for a given position.

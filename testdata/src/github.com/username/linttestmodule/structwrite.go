@@ -1,3 +1,5 @@
+// Package linttestmodule is a collection of code representing test cases for the linter.
+// See package golang.org/x/tools/go/analysis/analysistest for details.
 package linttestmodule
 
 type NonWritable struct {
@@ -59,6 +61,14 @@ func NonWritableSetWithinMap() {
 	// writing to a non-pointer value in a map is a compile error
 }
 
+func NonWritableSetWithinAnonymousFunc() {
+	nw := NewNonWritable()
+	fn := func() {
+		nw.A = 1 // want "write to NonWritable field outside constructor"
+	}
+	fn()
+}
+
 type Writable struct {
 	A int
 }
@@ -75,6 +85,7 @@ func (w Writable) SetA() {
 
 type EmbedsNonWritable struct {
 	NonWritable
+	B int
 }
 
 func NewEmbedsNonWritable() EmbedsNonWritable {
@@ -88,10 +99,13 @@ func (w *EmbedsNonWritable) SetA() {
 }
 
 func NonEmbedsWritableConstructLiteral() {
-	nw := EmbedsNonWritable{}                                // TODO - currently allowed
-	nw = EmbedsNonWritable{NonWritable: NonWritable{A: 1}}   // want "construction of NonWritable outside constructor"
-	nwp := &EmbedsNonWritable{}                              // TODO - currently allowed
-	nwp = &EmbedsNonWritable{NonWritable: NonWritable{A: 1}} // want "construction of NonWritable outside constructor"
+	nw := EmbedsNonWritable{}                                    // TODO - currently allowed
+	nw = EmbedsNonWritable{B: 2}                                 // TODO - currently allowed
+	nw = EmbedsNonWritable{NonWritable: NonWritable{A: 1}}       // want "construction of NonWritable outside constructor"
+	nw = EmbedsNonWritable{B: 2, NonWritable: NonWritable{A: 1}} // want "construction of NonWritable outside constructor"
+	nwp := &EmbedsNonWritable{}                                  // TODO - currently allowed
+	nwp = &EmbedsNonWritable{B: 2}                               // TODO - currently allowed
+	nwp = &EmbedsNonWritable{NonWritable: NonWritable{A: 1}}     // want "construction of NonWritable outside constructor"
 	_ = nw
 	_ = nwp
 }
